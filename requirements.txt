@@ -1,0 +1,5 @@
+pandas
+promptflow
+promptflow-tools
+azure-identity
+promptflow-evals
