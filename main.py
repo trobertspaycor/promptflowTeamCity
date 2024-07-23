@@ -1,6 +1,8 @@
 from azure.identity import DefaultAzureCredential
 import json
+import os
 import pandas as pd
+from dotenv import load_dotenv
 
 from promptflow.core import AzureOpenAIModelConfiguration
 from promptflow.evals.evaluators import (
@@ -12,10 +14,34 @@ from promptflow.evals.evaluators import (
     ViolenceEvaluator,
 )
 
+from promptflow.client import PFClient
+from promptflow.entities import AzureOpenAIConnection
+
+# Get a pf client to manage connections
+pf = PFClient()
+
+load_dotenv()
+api_key = os.getenv('AZURE_OPENAI_API_KEY')
+endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+model = os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME')
+version = os.getenv('AZURE_OPENAI_API_VERSION')
+
+# Initialize an AzureOpenAIConnection object
+connection = AzureOpenAIConnection(
+    name="pf_test",
+    api_key=api_key,
+    api_base=endpoint,
+    api_version=version
+)
+
+# Create the connection, note that api_key will be scrubbed in the returned result
+result = pf.connections.create_or_update(connection)
+print(result)
+
 model_config = AzureOpenAIModelConfiguration(
-    azure_endpoint="<<>>",
-    api_key="<<>>",
-    azure_deployment="gpt-35-turbo-16k",
+    azure_endpoint=endpoint,
+    api_key=api_key,
+    azure_deployment=model,
 )
 
 project_scope = {
@@ -24,42 +50,48 @@ project_scope = {
     "project_name": "<<>>",
 }
 
-test_data_file = "test_questions.csv"
+test_data_file = "test_questions.xlsx"
 
 
 def run_quality_evaluators(data: pd.DataFrame):
-    # TODO modify this script to pull data from the df in a loop and determine how scoring should work
-    eval_scores = {}
+    final_scores = []
 
-    # Groundedness
-    groundedness_eval = GroundednessEvaluator(model_config)
-    groundedness_score = groundedness_eval(
-        answer="The Alpine Explorer Tent is the most waterproof.",
-        context="From the our product list, the alpine explorer tent is the most waterproof. The Adventure Dining "
-                "Table has higher weight.",
-    )
-    eval_scores['groundedness'] = groundedness_score
+    for index, row in data.iterrows():
+        eval_dict = {}
+        eval_dict['question'] = row['question']
+        eval_dict['ground_truth'] = row['ground_truth']
+        eval_dict['answer'] = row['answer']
+        eval_dict['context'] = row['context']
 
-    # Relevance
-    relevance_eval = RelevanceEvaluator(model_config)
-    relevance_score = relevance_eval(
-        question="What is the capital of Japan?",
-        answer="The capital of Japan is Tokyo.",
-        context="Tokyo is Japan's capital, known for its blend of traditional culture \
-            and technological advancements.",
-    )
-    eval_scores['relevance'] = relevance_score
+        # Groundedness
+        groundedness_eval = GroundednessEvaluator(model_config)
+        groundedness_score = groundedness_eval(
+            answer=row['answer'],
+            context=row['context'],
+        )
+        eval_dict['groundedness'] = groundedness_score
 
-    # Similarity
-    similarity_eval = SimilarityEvaluator(model_config)
-    similarity_score = similarity_eval(
-        question="What is the capital of Japan?",
-        answer="The capital of Japan is Tokyo.",
-        ground_truth="Tokyo is Japan's capital.",
-    )
-    eval_scores['similarity'] = similarity_score
+        # Relevance
+        relevance_eval = RelevanceEvaluator(model_config)
+        relevance_score = relevance_eval(
+            question=row['question'],
+            answer=row['answer'],
+            context=row['context'],
+        )
+        eval_dict['relevance'] = relevance_score
 
-    return eval_scores
+        # Similarity
+        similarity_eval = SimilarityEvaluator(model_config)
+        similarity_score = similarity_eval(
+            question=row['question'],
+            answer=row['answer'],
+            ground_truth=row['ground_truth'],
+        )
+        eval_dict['similarity'] = similarity_score
+
+        final_scores.append(eval_dict)
+
+    return final_scores
 
 
 def run_safety_evaluators(data: pd.DataFrame):
@@ -67,7 +99,7 @@ def run_safety_evaluators(data: pd.DataFrame):
 
     # Violence
     violence_eval = ViolenceEvaluator(project_scope)
-    violence_score = violence_eval(question="What is the capital of France?", answer="Paris.")
+    violence_score = violence_eval(question="What is the capital of France?", answer="Paris.")  # this does not work, auth issues
     safety_eval_scores['violence'] = violence_score
 
     # Self Harm
@@ -99,15 +131,11 @@ def run_safety_evaluators(data: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    data_df = pd.read_csv(test_data_file)
+    data_df = pd.read_excel(test_data_file)
 
     quality_scores = run_quality_evaluators(data_df)
-    safety_scores = run_safety_evaluators(data_df)
-
-    quality_scores_json = json.dumps(quality_scores)
-    safety_scores_json = json.dumps(safety_scores)
 
     with open("output.txt", "w") as file:
-        file.write(quality_scores_json)
-        file.write(safety_scores_json)
-
+        for dictionary in quality_scores:
+            quality_scores_json = json.dumps(dictionary)
+            file.write(quality_scores_json + '\n')

@@ -3,3 +3,4 @@ promptflow
 promptflow-tools
 azure-identity
 promptflow-evals
+python-dotenv
